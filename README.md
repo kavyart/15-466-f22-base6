@@ -1,10 +1,10 @@
-# (TODO: your game's title)
+# snakey snakes
 
-Author: (TODO: your name)
+Author: Kavya Tummalapalli
 
-Design: (TODO: In two sentences or fewer, describe what is new and interesting about your game.)
+Design: What is new and interesting about my game is that this is a multiplayer snake game where the snakes are competing for food and can "attack" (cut each other off) to try to become the longest snake!
 
-Networking: (TODO: How does your game implement client/server multiplayer? What messages are transmitted? Where in the code?)
+Networking: My game implements client/server multiplayer by sending messages with player information to the server and receiving information back and similarly the server sending controls messages to the client and the clients using this information to update the player and game states. Most of the messages code is located in Game.cpp in the send_controls_message(), recv_controls_message(), send_state_message(), and recv_state_message() functions.
 
 Screen Shot:
 
@@ -12,9 +12,8 @@ Screen Shot:
 
 How To Play:
 
-(TODO: describe the controls and (if needed) goals/strategy.)
+The controls of this game are to use the wasd keys for up, left, down, and right respectively to move your snake. Collect the food (the white circles) to grow your snake, and avoid running into or through other snakes as they can cut you off and you can lose your 3 lives. Try to grow to be the longest snake possible, while attempting to stay alive!
 
-Sources: (TODO: list a source URL for any assets you did not create yourself. Make sure you have a license for the asset.)
 
 This game was built with [NEST](NEST.md).
 

@@ -8,11 +8,17 @@
 
 #include <glm/gtx/norm.hpp>
 
+// message format:
+// |_||_ _ _| |_ _ _ ... _ _ _|
+// id   size        data
+// |->'c' for control
+//       |-> low to high bytes
+
 void Player::Controls::send_controls_message(Connection *connection_) const {
 	assert(connection_);
 	auto &connection = *connection_;
 
-	uint32_t size = 5;
+	uint32_t size = 4;
 	connection.send(Message::C2S_Controls);
 	connection.send(uint8_t(size));
 	connection.send(uint8_t(size >> 8));
@@ -29,7 +35,6 @@ void Player::Controls::send_controls_message(Connection *connection_) const {
 	send_button(right);
 	send_button(up);
 	send_button(down);
-	send_button(jump);
 }
 
 bool Player::Controls::recv_controls_message(Connection *connection_) {
@@ -44,7 +49,7 @@ bool Player::Controls::recv_controls_message(Connection *connection_) {
 	uint32_t size = (uint32_t(recv_buffer[3]) << 16)
 	              | (uint32_t(recv_buffer[2]) << 8)
 	              |  uint32_t(recv_buffer[1]);
-	if (size != 5) throw std::runtime_error("Controls message with size " + std::to_string(size) + " != 5!");
+	if (size != 4) throw std::runtime_error("Controls message with size " + std::to_string(size) + " != 5!");
 	
 	//expecting complete message:
 	if (recv_buffer.size() < 4 + size) return false;
@@ -63,7 +68,6 @@ bool Player::Controls::recv_controls_message(Connection *connection_) {
 	recv_button(recv_buffer[4+1], &right);
 	recv_button(recv_buffer[4+2], &up);
 	recv_button(recv_buffer[4+3], &down);
-	recv_button(recv_buffer[4+4], &jump);
 
 	//delete message from buffer:
 	recv_buffer.erase(recv_buffer.begin(), recv_buffer.begin() + 4 + size);
@@ -75,6 +79,8 @@ bool Player::Controls::recv_controls_message(Connection *connection_) {
 //-----------------------------------------
 
 Game::Game() : mt(0x15466666) {
+	food.x = ((float)(rand() % 500) / 250.0f) - 1.0f;
+    food.y = ((float)(rand() % 500) / 250.0f) - 1.0f;
 }
 
 Player *Game::spawn_player() {
@@ -85,6 +91,9 @@ Player *Game::spawn_player() {
 	player.position.x = glm::mix(ArenaMin.x + 2.0f * PlayerRadius, ArenaMax.x - 2.0f * PlayerRadius, 0.4f + 0.2f * mt() / float(mt.max()));
 	player.position.y = glm::mix(ArenaMin.y + 2.0f * PlayerRadius, ArenaMax.y - 2.0f * PlayerRadius, 0.4f + 0.2f * mt() / float(mt.max()));
 
+	player.body_x.push_back((player.position.x * 50) + 50);
+	player.body_y.push_back((player.position.y * 50) + 50);
+
 	do {
 		player.color.r = mt() / float(mt.max());
 		player.color.g = mt() / float(mt.max());
@@ -92,7 +101,7 @@ Player *Game::spawn_player() {
 	} while (player.color == glm::vec3(0.0f));
 	player.color = glm::normalize(player.color);
 
-	player.name = "Player " + std::to_string(next_player_number++);
+	player.name = std::to_string(next_player_number++);
 
 	return &player;
 }
@@ -112,76 +121,60 @@ void Game::remove_player(Player *player) {
 void Game::update(float elapsed) {
 	//position/velocity update:
 	for (auto &p : players) {
-		glm::vec2 dir = glm::vec2(0.0f, 0.0f);
-		if (p.controls.left.pressed) dir.x -= 1.0f;
-		if (p.controls.right.pressed) dir.x += 1.0f;
-		if (p.controls.down.pressed) dir.y -= 1.0f;
-		if (p.controls.up.pressed) dir.y += 1.0f;
+		float tile_size = 2 * PlayerRadius;
+		if (p.controls.left.pressed) p.position.x -= tile_size;
+		if (p.controls.right.pressed) p.position.x += tile_size;
+		if (p.controls.down.pressed) p.position.y -= tile_size;
+		if (p.controls.up.pressed) p.position.y += tile_size;
 
-		if (dir == glm::vec2(0.0f)) {
-			//no inputs: just drift to a stop
-			float amt = 1.0f - std::pow(0.5f, elapsed / (PlayerAccelHalflife * 2.0f));
-			p.velocity = glm::mix(p.velocity, glm::vec2(0.0f,0.0f), amt);
-		} else {
-			//inputs: tween velocity to target direction
-			dir = glm::normalize(dir);
-
-			float amt = 1.0f - std::pow(0.5f, elapsed / PlayerAccelHalflife);
-
-			//accelerate along velocity (if not fast enough):
-			float along = glm::dot(p.velocity, dir);
-			if (along < PlayerSpeed) {
-				along = glm::mix(along, PlayerSpeed, amt);
-			}
-
-			//damp perpendicular velocity:
-			float perp = glm::dot(p.velocity, glm::vec2(-dir.y, dir.x));
-			perp = glm::mix(perp, 0.0f, amt);
-
-			p.velocity = dir * along + glm::vec2(-dir.y, dir.x) * perp;
+		p.body_x.push_back((p.position.x * 50) + 50);
+		p.body_y.push_back((p.position.y * 50) + 50);
+		if (p.body_x.size() > p.len) {
+			p.body_x.pop_front();
+			p.body_y.pop_front();
 		}
-		p.position += p.velocity * elapsed;
+
+		if (abs(p.position.x - food.x) < tile_size + 0.008f && abs(p.position.y - food.y) < tile_size + 0.008f) {
+			p.len++;
+			food.x = ((float)(rand() % 500) / 250.0f) - 1.0f;
+    		food.y = ((float)(rand() % 500) / 250.0f) - 1.0f;
+		}
 
 		//reset 'downs' since controls have been handled:
 		p.controls.left.downs = 0;
 		p.controls.right.downs = 0;
 		p.controls.up.downs = 0;
 		p.controls.down.downs = 0;
-		p.controls.jump.downs = 0;
 	}
 
-	//collision resolution:
+	// collision resolution:
 	for (auto &p1 : players) {
 		//player/player collisions:
 		for (auto &p2 : players) {
 			if (&p1 == &p2) break;
-			glm::vec2 p12 = p2.position - p1.position;
-			float len2 = glm::length2(p12);
-			if (len2 > (2.0f * PlayerRadius) * (2.0f * PlayerRadius)) continue;
-			if (len2 == 0.0f) continue;
-			glm::vec2 dir = p12 / std::sqrt(len2);
-			//mirror velocity to be in separating direction:
-			glm::vec2 v12 = p2.velocity - p1.velocity;
-			glm::vec2 delta_v12 = dir * glm::max(0.0f, -1.75f * glm::dot(dir, v12));
-			p2.velocity += 0.5f * delta_v12;
-			p1.velocity -= 0.5f * delta_v12;
+
+			for (uint8_t i = 1; i < p2.len; i++) {
+				if (abs(p1.body_x.at(0) - p2.body_x.at(i)) < 0.021f && abs(p1.body_y.at(0) - p2.body_y.at(i)) < 0.021) {
+					p2.body_x.erase(p2.body_x.begin() + i, p2.body_x.end());
+					p2.body_y.erase(p2.body_y.begin() + i, p2.body_y.end());
+					p2.lives--;
+					p2.len = i;
+					break;
+				}
+			}
 		}
 		//player/arena collisions:
 		if (p1.position.x < ArenaMin.x + PlayerRadius) {
 			p1.position.x = ArenaMin.x + PlayerRadius;
-			p1.velocity.x = std::abs(p1.velocity.x);
 		}
 		if (p1.position.x > ArenaMax.x - PlayerRadius) {
 			p1.position.x = ArenaMax.x - PlayerRadius;
-			p1.velocity.x =-std::abs(p1.velocity.x);
 		}
 		if (p1.position.y < ArenaMin.y + PlayerRadius) {
 			p1.position.y = ArenaMin.y + PlayerRadius;
-			p1.velocity.y = std::abs(p1.velocity.y);
 		}
 		if (p1.position.y > ArenaMax.y - PlayerRadius) {
 			p1.position.y = ArenaMax.y - PlayerRadius;
-			p1.velocity.y =-std::abs(p1.velocity.y);
 		}
 	}
 
@@ -203,14 +196,26 @@ void Game::send_state_message(Connection *connection_, Player *connection_player
 	//send player info helper:
 	auto send_player = [&](Player const &player) {
 		connection.send(player.position);
-		connection.send(player.velocity);
 		connection.send(player.color);
+		connection.send(player.len);
+		connection.send(player.lives);
 	
 		//NOTE: can't just 'send(name)' because player.name is not plain-old-data type.
 		//effectively: truncates player name to 255 chars
 		uint8_t len = uint8_t(std::min< size_t >(255, player.name.size()));
 		connection.send(len);
 		connection.send_buffer.insert(connection.send_buffer.end(), player.name.begin(), player.name.begin() + len);
+
+		len = uint8_t(std::min< size_t >(255, player.body_x.size()));
+		connection.send(len);
+		connection.send_buffer.insert(connection.send_buffer.end(), player.body_x.begin(), player.body_x.begin() + len);
+
+		len = uint8_t(std::min< size_t >(255, player.body_y.size()));
+		connection.send(len);
+		connection.send_buffer.insert(connection.send_buffer.end(), player.body_y.begin(), player.body_y.begin() + len);
+
+		connection.send(food.x);
+		connection.send(food.y);
 	};
 
 	//player count:
@@ -258,8 +263,9 @@ bool Game::recv_state_message(Connection *connection_) {
 		players.emplace_back();
 		Player &player = players.back();
 		read(&player.position);
-		read(&player.velocity);
 		read(&player.color);
+		read(&player.len);
+		read(&player.lives);
 		uint8_t name_len;
 		read(&name_len);
 		//n.b. would probably be more efficient to directly copy from recv_buffer, but I think this is clearer:
@@ -269,6 +275,25 @@ bool Game::recv_state_message(Connection *connection_) {
 			read(&c);
 			player.name += c;
 		}
+		uint8_t body_x_len;
+		read(&body_x_len);
+		player.body_x.clear();
+		for (uint8_t n = 0; n < body_x_len; ++n) {
+			uint8_t x;
+			read(&x);
+			player.body_x.push_back(x);
+		}
+		uint8_t body_y_len;
+		read(&body_y_len);
+		player.body_y.clear();
+		for (uint8_t n = 0; n < body_y_len; ++n) {
+			uint8_t y;
+			read(&y);
+			player.body_y.push_back(y);
+		}
+
+		read(&food.x);
+		read(&food.y);
 	}
 
 	if (at != size) throw std::runtime_error("Trailing data in state message.");
